@@ -777,6 +777,320 @@ class Stage2IntersectionEnv:
             infos,
         )
 
+    def filter_actions(
+        self,
+        proposed_actions: Dict[str, int],
+        predicted_action_probs: Optional[Dict[str, np.ndarray]] = None,
+    ) -> Tuple[Dict[str, int], Dict[str, str]]:
+        """Apply a predictive safety layer to policy actions."""
+        if set(proposed_actions) != set(self.agents):
+            raise ValueError("Proposed actions must include every learning agent.")
+        for action in proposed_actions.values():
+            if int(action) not in ACTION_NAMES:
+                raise ValueError(f"Invalid proposed action: {action}")
+
+        actions = {agent_id: int(action) for agent_id, action in proposed_actions.items()}
+        decisions = {agent_id: "Policy" for agent_id in self.agents}
+        accel_by_action = (
+            self.config.max_braking,
+            self.config.yield_acceleration,
+            0.0,
+            self.config.max_acceleration,
+        )
+        behavior_bias = {
+            "aggressive": -0.4,
+            "neutral": 0.0,
+            "conservative": 0.4,
+        }
+        predicted_acceleration = {}
+
+        for agent_id in self.agents:
+            probabilities = (
+                None
+                if predicted_action_probs is None
+                else predicted_action_probs.get(agent_id)
+            )
+            if probabilities is None:
+                predicted = 0.0
+            else:
+                probabilities = np.asarray(probabilities, dtype=np.float64)
+                if (
+                    probabilities.shape != (self.action_dim,)
+                    or not np.all(np.isfinite(probabilities))
+                    or np.any(probabilities < 0.0)
+                    or not np.isclose(probabilities.sum(), 1.0, atol=1e-3)
+                ):
+                    raise ValueError(
+                        f"{agent_id} predicted action probabilities must be "
+                        "a finite 4-element distribution."
+                    )
+                predicted = float(np.dot(probabilities, accel_by_action))
+            policy_acceleration = accel_by_action[actions[agent_id]]
+            predicted_acceleration[agent_id] = 0.5 * (
+                predicted + policy_acceleration
+            )
+
+        for agent_id in self.agents:
+            ego = self.vehicles[agent_id]
+            if ego.completed or ego.collided:
+                continue
+
+            ego_acceleration = accel_by_action[actions[agent_id]]
+            others = (
+                [
+                    vehicle
+                    for other_id, vehicle in self.vehicles.items()
+                    if other_id != agent_id
+                ]
+                + self.background_vehicles
+            )
+            for other in others:
+                if other.completed or other.collided:
+                    continue
+
+                dx = other.x - ego.x
+                dy = other.y - ego.y
+                longitudinal_gap = (
+                    dx * math.cos(ego.heading)
+                    + dy * math.sin(ego.heading)
+                )
+                lateral_gap = abs(
+                    -dx * math.sin(ego.heading)
+                    + dy * math.cos(ego.heading)
+                )
+                same_direction = (
+                    math.cos(ego.heading - other.heading) > 0.5
+                )
+                closing_speed = ego.speed - other.speed
+                required_gap = max(8.0, 5.0 + ego.speed * 1.2)
+                if (
+                    same_direction
+                    and 0.0 < longitudinal_gap < required_gap
+                    and lateral_gap < self.config.lane_width
+                    and closing_speed > 0.0
+                ):
+                    stopping_gap = (
+                        ego.speed**2
+                        / (2.0 * abs(self.config.max_braking))
+                        + 2.0
+                    )
+                    actions[agent_id] = (
+                        BRAKE if longitudinal_gap < max(6.0, stopping_gap)
+                        else YIELD
+                    )
+                    decisions[agent_id] = (
+                        f"Following {other.vehicle_id} "
+                        f"({longitudinal_gap:.1f} m)"
+                    )
+                    ego_acceleration = accel_by_action[actions[agent_id]]
+
+                other_acceleration = (
+                    predicted_acceleration[other.vehicle_id]
+                    if other.is_learning
+                    else self._background_acceleration(other)
+                )
+                predicted_close_time = self._predicted_close_approach(
+                    ego,
+                    other,
+                    ego_acceleration,
+                    other_acceleration,
+                )
+                if predicted_close_time is not None:
+                    ego_rank = behavior_bias[self.behaviors[agent_id]]
+                    if other.is_learning:
+                        other_rank = behavior_bias[
+                            self.behaviors[other.vehicle_id]
+                        ]
+                        if (
+                            self._is_in_intersection(other)
+                            and not self._is_in_intersection(ego)
+                        ):
+                            other_rank -= 2.0
+                        elif (
+                            self._is_in_intersection(ego)
+                            and not self._is_in_intersection(other)
+                        ):
+                            ego_rank -= 2.0
+                    elif (
+                        same_direction
+                        and longitudinal_gap > 0.0
+                        and lateral_gap < self.config.lane_width
+                    ):
+                        other_rank = -1.0
+                    elif (
+                        self._is_in_intersection(other)
+                        and not self._is_in_intersection(ego)
+                    ):
+                        other_rank = -2.0
+                    else:
+                        other_rank = 1.0
+                    if (ego_rank, agent_id) > (other_rank, other.vehicle_id):
+                        actions[agent_id] = (
+                            BRAKE if predicted_close_time < 2.0 else YIELD
+                        )
+                        decisions[agent_id] = (
+                            f"Predicted conflict with {other.vehicle_id} "
+                            f"({predicted_close_time:.1f} s)"
+                        )
+                        ego_acceleration = accel_by_action[actions[agent_id]]
+
+                ego_conflict, other_conflict = self._get_conflict_distances(
+                    ego, other
+                )
+                if ego_conflict is None or other_conflict is None:
+                    continue
+
+                ego_remaining = ego_conflict - ego.progress
+                other_remaining = other_conflict - other.progress
+                if (
+                    ego_remaining < -ego.length
+                    or other_remaining < -other.length
+                ):
+                    continue
+
+                ego_time = self._time_to_distance(
+                    ego_remaining, ego.speed, ego_acceleration
+                )
+                other_time = self._time_to_distance(
+                    other_remaining, other.speed, other_acceleration
+                )
+                if not math.isfinite(ego_time) or not math.isfinite(other_time):
+                    continue
+
+                safety_gap = min(
+                    4.0, 1.5 + (ego.speed + other.speed) / 10.0
+                )
+                if (
+                    min(ego_time, other_time) > 8.0
+                    or abs(ego_time - other_time) > safety_gap
+                ):
+                    continue
+
+                ego_rank = (
+                    ego_time + behavior_bias[self.behaviors[agent_id]]
+                )
+                other_inside = self._is_in_intersection(other)
+                ego_inside = self._is_in_intersection(ego)
+                if ego_inside and not other_inside:
+                    ego_rank -= 2.0
+                if other.is_learning:
+                    other_rank = (
+                        other_time
+                        + behavior_bias[self.behaviors[other.vehicle_id]]
+                    )
+                    if other_inside and not ego_inside:
+                        other_rank -= 2.0
+                else:
+                    other_rank = other_time + (
+                        -2.0 if other_inside and not ego_inside else 0.5
+                    )
+                if (ego_rank, agent_id) > (other_rank, other.vehicle_id):
+                    actions[agent_id] = BRAKE if ego_time < 2.0 else YIELD
+                    decisions[agent_id] = (
+                        f"Yielding to {other.vehicle_id} "
+                        f"(ETA {other_time:.1f} s)"
+                    )
+                    ego_acceleration = accel_by_action[actions[agent_id]]
+
+        return actions, decisions
+
+    def _is_in_intersection(self, vehicle: Vehicle) -> bool:
+        extent = (
+            self.config.intersection_half_width
+            + vehicle.length / 2.0
+        )
+        return abs(vehicle.x) <= extent and abs(vehicle.y) <= extent
+
+    @staticmethod
+    def _time_to_distance(
+        distance: float,
+        speed: float,
+        acceleration: float,
+    ) -> float:
+        """Estimate arrival time under bounded constant acceleration."""
+        if distance <= 0.0:
+            return 0.0
+        acceleration = float(np.clip(acceleration, -4.0, 2.0))
+        speed = max(float(speed), 0.0)
+        if abs(acceleration) < 1e-6:
+            return distance / max(speed, 0.5)
+        discriminant = speed * speed + 2.0 * acceleration * distance
+        if discriminant < 0.0:
+            return float("inf")
+        return max((-speed + math.sqrt(discriminant)) / acceleration, 0.0)
+
+    def _predicted_close_approach(
+        self,
+        a: Vehicle,
+        b: Vehicle,
+        acceleration_a: float,
+        acceleration_b: float,
+    ) -> Optional[float]:
+        """Return when planned routes come within the collision buffer."""
+        dt = 0.2
+        horizon = 4.0
+        threshold = self.config.collision_distance + 1.0
+        progress_a = a.progress
+        progress_b = b.progress
+        speed_a = a.speed
+        speed_b = b.speed
+
+        for index in range(int(horizon / dt) + 1):
+            if index:
+                old_speed_a = speed_a
+                old_speed_b = speed_b
+                speed_a = float(np.clip(
+                    speed_a + acceleration_a * dt,
+                    0.0,
+                    self.config.max_speed,
+                ))
+                speed_b = float(np.clip(
+                    speed_b + acceleration_b * dt,
+                    0.0,
+                    self.config.background_max_speed,
+                ))
+                progress_a += 0.5 * (old_speed_a + speed_a) * dt
+                progress_b += 0.5 * (old_speed_b + speed_b) * dt
+
+            position_a = self._position_at_progress(a, progress_a)
+            position_b = self._position_at_progress(b, progress_b)
+            if self._distance_points(position_a, position_b) <= threshold:
+                return index * dt
+        return None
+
+    @staticmethod
+    def _position_at_progress(
+        vehicle: Vehicle,
+        progress: float,
+    ) -> np.ndarray:
+        if progress <= 0.0:
+            return vehicle.route_points_np[0]
+        if progress >= vehicle.route_cumulative_lengths[-1]:
+            return vehicle.route_points_np[-1]
+
+        segment_index = bisect_left(
+            vehicle.route_cumulative_lengths,
+            progress,
+        ) - 1
+        segment_index = max(
+            0,
+            min(segment_index, len(vehicle.route_segment_lengths) - 1),
+        )
+        segment_length = max(
+            vehicle.route_segment_lengths[segment_index],
+            1e-8,
+        )
+        ratio = (
+            progress - vehicle.route_cumulative_lengths[segment_index]
+        ) / segment_length
+        start = vehicle.route_points_np[segment_index]
+        end = vehicle.route_points_np[segment_index + 1]
+        return start + ratio * (end - start)
+
+    @staticmethod
+    def _distance_points(a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.linalg.norm(a - b))
+
     # ========================================================
     # LEARNING VEHICLE CREATION
     # ========================================================
@@ -990,14 +1304,14 @@ class Stage2IntersectionEnv:
         if approach == "north":
 
             return (
-                offset,
+                -offset,
                 distance,
             )
 
         if approach == "south":
 
             return (
-                -offset,
+                offset,
                 -distance,
             )
 
@@ -1045,12 +1359,12 @@ class Stage2IntersectionEnv:
 
             return (
                 distance,
-                offset,
+                -offset,
             )
 
         return (
             -distance,
-            -offset,
+            offset,
         )
 
     # ========================================================
@@ -1062,17 +1376,11 @@ class Stage2IntersectionEnv:
         lane: int,
     ) -> float:
 
-        # Lane 0 = right lane
-        # Lane 1 = left lane
-        half = (
-            self.config.lane_width
-            / 2.0
-        )
-
-        if lane == 0:
-            return half
-
-        return -half
+        return (
+            self.config.lanes_per_approach
+            - lane
+            - 0.5
+        ) * self.config.lane_width
 
     # ========================================================
     # DESTINATION APPROACH
@@ -1125,21 +1433,8 @@ class Stage2IntersectionEnv:
         maneuver: str,
     ) -> int:
 
-        # Straight-through traffic changes
-        # physical lane side because lane numbering
-        # is relative to travel direction.
-
-        if maneuver == "straight":
-
-            return (
-                self.config.lanes_per_approach
-                - 1
-                - entry_lane
-            )
-
-        # Turning vehicles stay in the
-        # corresponding lane side.
-
+        # Lane numbering is relative to each approach's direction of travel,
+        # so straight-through vehicles retain their lane index.
         return entry_lane
 
     # ========================================================
@@ -1257,90 +1552,38 @@ class Stage2IntersectionEnv:
             ),
         }[outgoing_approach]
 
-        p1 = (
-            p0
-            + incoming
-            * control_distance
+        turn_extent = half + 4.0
+        turn_start = p0 + incoming * (
+            self.config.approach_length - turn_extent
         )
-
-        p2 = (
-            p3
-            - outgoing
-            * control_distance
+        turn_end = p3 - outgoing * (
+            self.config.exit_length - turn_extent
         )
+        turn_control = min(half * 0.55, control_distance)
+        p1 = turn_start + incoming * turn_control
+        p2 = turn_end - outgoing * turn_control
 
-        # Slightly tighten turn controls
-        # inside the actual intersection.
-
-        if maneuver == "right":
-
-            p1 = (
-                p0
-                + incoming
-                * (
-                    half
-                    + 10.0
-                )
-            )
-
-            p2 = (
-                p3
-                - outgoing
-                * (
-                    half
-                    + 10.0
-                )
-            )
-
-        elif maneuver == "left":
-
-            p1 = (
-                p0
-                + incoming
-                * (
-                    half
-                    + 18.0
-                )
-            )
-
-            p2 = (
-                p3
-                - outgoing
-                * (
-                    half
-                    + 18.0
-                )
-            )
-
+        straight_samples = max(2, samples // 3)
+        turn_samples = max(2, samples - 2 * straight_samples + 2)
         points = []
 
-        for t in np.linspace(
-            0.0,
-            1.0,
-            samples,
-        ):
+        for t in np.linspace(0.0, 1.0, straight_samples):
+            point = p0 + t * (turn_start - p0)
+            points.append((float(point[0]), float(point[1])))
 
+        for t in np.linspace(0.0, 1.0, turn_samples)[1:]:
             one_minus = 1.0 - t
-
             point = (
-                one_minus**3 * p0
-                + 3
-                * one_minus**2
-                * t
-                * p1
-                + 3
-                * one_minus
-                * t**2
-                * p2
-                + t**3 * p3
+                one_minus**3 * turn_start
+                + 3.0 * one_minus**2 * t * p1
+                + 3.0 * one_minus * t**2 * p2
+                + t**3 * turn_end
             )
+            points.append((float(point[0]), float(point[1])))
 
-            points.append(
-                (
-                    float(point[0]),
-                    float(point[1]),
-                )
-            )
+        for t in np.linspace(0.0, 1.0, straight_samples)[1:]:
+            point = turn_end + t * (p3 - turn_end)
+            points.append((float(point[0]), float(point[1])))
 
         return points
 
@@ -1518,15 +1761,21 @@ class Stage2IntersectionEnv:
             + self.config.background_max_speed
         ) / 2.0
 
+        if self._is_in_intersection(vehicle):
+            if vehicle.speed < target - 0.5:
+                return 1.0
+            return 0.0
+
         for agent in self.vehicles.values():
-            same_approach = agent.approach == vehicle.approach
-            same_lane = agent.lane == vehicle.lane
             before_intersection = min(
                 agent.progress,
                 vehicle.progress,
             ) < self.config.approach_length
-
-            if same_approach and same_lane and before_intersection:
+            if (
+                agent.approach == vehicle.approach
+                and agent.lane == vehicle.lane
+                and before_intersection
+            ):
                 if (
                     agent.progress < vehicle.progress
                     and vehicle.progress - agent.progress < 30.0
@@ -1539,6 +1788,35 @@ class Stage2IntersectionEnv:
                     and vehicle.speed > agent.speed + 0.1
                 ):
                     return self.config.yield_acceleration
+
+            dx = agent.x - vehicle.x
+            dy = agent.y - vehicle.y
+            longitudinal_gap = (
+                dx * math.cos(vehicle.heading)
+                + dy * math.sin(vehicle.heading)
+            )
+            lateral_gap = abs(
+                -dx * math.sin(vehicle.heading)
+                + dy * math.cos(vehicle.heading)
+            )
+            same_direction = (
+                math.cos(vehicle.heading - agent.heading) > 0.5
+            )
+
+            if (
+                same_direction
+                and lateral_gap < self.config.lane_width
+                and 0.0 < longitudinal_gap < 30.0
+                and vehicle.speed > agent.speed + 0.1
+            ):
+                return self.config.yield_acceleration
+            if (
+                same_direction
+                and lateral_gap < self.config.lane_width
+                and -30.0 < longitudinal_gap < 0.0
+                and agent.speed > vehicle.speed + 0.1
+            ):
+                target = self.config.background_max_speed
 
             traffic_ttc, agent_ttc = self._time_to_conflict(
                 vehicle,
@@ -1632,9 +1910,11 @@ class Stage2IntersectionEnv:
         self,
     ) -> None:
 
-        all_learning = list(
-            self.vehicles.values()
-        )
+        all_learning = [
+            vehicle
+            for vehicle in self.vehicles.values()
+            if not vehicle.completed
+        ]
 
         # ----------------------------------------------------
         # Learning ↔ learning
@@ -1680,6 +1960,8 @@ class Stage2IntersectionEnv:
         for agent in all_learning:
 
             for traffic in self.background_vehicles:
+                if traffic.completed:
+                    continue
 
                 distance = self._distance(
                     agent,
@@ -1708,8 +1990,16 @@ class Stage2IntersectionEnv:
         self,
     ) -> None:
 
-        learning_vehicles = list(self.vehicles.values())
-        background_vehicles = self.background_vehicles
+        learning_vehicles = [
+            vehicle
+            for vehicle in self.vehicles.values()
+            if not vehicle.completed
+        ]
+        background_vehicles = [
+            vehicle
+            for vehicle in self.background_vehicles
+            if not vehicle.completed
+        ]
 
         # Safety metrics describe the learning task.  Background-vs-background
         # encounters are not counted as near-collisions or TTC events.
@@ -1768,11 +2058,24 @@ class Stage2IntersectionEnv:
     # APPROXIMATE TTC
     # ========================================================
 
-    @staticmethod
     def _approximate_ttc(
+        self,
         a: Vehicle,
         b: Vehicle,
     ) -> float:
+
+        conflict_a, conflict_b = self._get_conflict_distances(a, b)
+        if conflict_a is not None and conflict_b is not None:
+            remaining_a = conflict_a - a.progress
+            remaining_b = conflict_b - b.progress
+            if remaining_a < -a.length or remaining_b < -b.length:
+                return float("inf")
+
+            time_a = max(remaining_a, 0.0) / max(a.speed, 0.5)
+            time_b = max(remaining_b, 0.0) / max(b.speed, 0.5)
+            if abs(time_a - time_b) <= self.config.dangerous_ttc:
+                return min(time_a, time_b)
+            return float("inf")
 
         dx = b.x - a.x
         dy = b.y - a.y
@@ -1820,7 +2123,7 @@ class Stage2IntersectionEnv:
         if cached is not None:
             return cached
 
-        if a.approach == b.approach:
+        if a.approach == b.approach and a.lane == b.lane:
             result = (None, None)
             self._conflict_cache[key] = result
             return result
@@ -2049,7 +2352,11 @@ class Stage2IntersectionEnv:
         # ----------------------------------------------------
 
         traffic = sorted(
-            self.background_vehicles,
+            [
+                vehicle
+                for vehicle in self.background_vehicles
+                if not vehicle.completed
+            ],
             key=lambda v: self._distance(
                 ego,
                 v,
@@ -2286,8 +2593,13 @@ class Stage2IntersectionEnv:
                 for v in self.vehicles.values()
                 if v.vehicle_id
                 != ego.vehicle_id
+                and not v.completed
             ]
-            + self.background_vehicles
+            + [
+                vehicle
+                for vehicle in self.background_vehicles
+                if not vehicle.completed
+            ]
         )
 
         for other in all_other:

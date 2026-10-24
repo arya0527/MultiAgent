@@ -25,6 +25,7 @@ from intersection_env import (
     APPROACHES,
     SELECTED_MODELS,
     Stage2IntersectionEnv,
+    Stage2Config,
 )
 
 
@@ -282,6 +283,11 @@ def main() -> None:
     # 10. Route generation
     # --------------------------------------------------------
     def test_routes():
+        road_half_width = (
+            env.config.lane_width
+            * env.config.lanes_per_approach
+        )
+        intersection_half_width = env.config.intersection_half_width
         for approach in APPROACHES:
             for lane in range(2):
                 for maneuver in env._legal_maneuvers(lane):
@@ -305,8 +311,37 @@ def main() -> None:
                         "Route contains invalid values.",
                     )
 
+                    for x, y in route:
+                        on_intersection = (
+                            abs(x) <= intersection_half_width
+                            and abs(y) <= intersection_half_width
+                        )
+                        on_vertical_road = (
+                            abs(x) <= road_half_width
+                            and abs(y) <= (
+                                env.config.approach_length
+                                + intersection_half_width
+                            )
+                        )
+                        on_horizontal_road = (
+                            abs(y) <= road_half_width
+                            and abs(x) <= (
+                                env.config.approach_length
+                                + intersection_half_width
+                            )
+                        )
+                        check(
+                            on_intersection
+                            or on_vertical_road
+                            or on_horizontal_road,
+                            (
+                                f"{approach}/{lane}/{maneuver} leaves "
+                                f"the road at ({x:.2f}, {y:.2f})."
+                            ),
+                        )
+
     run_test(
-        "Route generation",
+        "Routes remain on road",
         test_routes,
     )
 
@@ -427,6 +462,86 @@ def main() -> None:
     run_test(
         "Action validation",
         test_action_validation,
+    )
+
+    # --------------------------------------------------------
+    # Predictive route-conflict safety filter
+    # --------------------------------------------------------
+    def test_predictive_safety_filter():
+        safety_env = Stage2IntersectionEnv(
+            seed=1,
+            config=Stage2Config(background_vehicle_count=0),
+            background_traffic=False,
+        )
+        safety_env.reset(
+            scenario=[
+                {
+                    "agent_id": "agent_0",
+                    "approach": "north",
+                    "maneuver": "straight",
+                    "lane": 0,
+                    "speed": 5.0,
+                },
+                {
+                    "agent_id": "agent_1",
+                    "approach": "east",
+                    "maneuver": "straight",
+                    "lane": 0,
+                    "speed": 5.0,
+                },
+                {
+                    "agent_id": "agent_2",
+                    "approach": "west",
+                    "maneuver": "straight",
+                    "lane": 0,
+                    "speed": 5.0,
+                },
+            ]
+        )
+        first = safety_env.vehicles["agent_0"]
+        second = safety_env.vehicles["agent_1"]
+        first_conflict, second_conflict = (
+            safety_env._get_conflict_distances(first, second)
+        )
+        check(
+            first_conflict is not None and second_conflict is not None,
+            "Expected the two routes to share a conflict point.",
+        )
+        first.progress = first_conflict - 10.0
+        second.progress = second_conflict - 10.0
+        first._update_position_from_route()
+        second._update_position_from_route()
+
+        ttc = safety_env._approximate_ttc(first, second)
+        check(
+            abs(ttc - 2.0) < 1e-6,
+            f"Expected a 2-second crossing TTC, got {ttc}.",
+        )
+        probabilities = {
+            agent_id: np.array([0.0, 0.0, 1.0, 0.0])
+            for agent_id in safety_env.agents
+        }
+        filtered, reasons = safety_env.filter_actions(
+            {agent_id: MAINTAIN for agent_id in safety_env.agents},
+            probabilities,
+        )
+        check(
+            filtered["agent_0"] == YIELD
+            and filtered["agent_1"] == MAINTAIN,
+            "The approaching vehicle did not yield to traffic in the intersection.",
+        )
+        check(
+            "agent_1" in reasons["agent_0"]
+            and (
+                reasons["agent_0"].startswith("Yielding to")
+                or reasons["agent_0"].startswith("Predicted conflict with")
+            ),
+            "The safety decision did not report its predicted conflict.",
+        )
+
+    run_test(
+        "Predictive conflict arbitration and TTC",
+        test_predictive_safety_filter,
     )
 
     # --------------------------------------------------------

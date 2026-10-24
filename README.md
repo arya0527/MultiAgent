@@ -26,6 +26,16 @@ python src/stage2/training/train_mappo.py --total-updates 50 --eval-interval 10 
 
 Add `--device cuda` or `--device cpu` to choose a device. Training writes checkpoints and evaluation reports under `models/stage2_mappo/` by default.
 
+Run the live intersection visualization:
+
+```bash
+python visualization/server.py
+```
+
+Open the local page served by the visualization server. Vehicles follow road-bounded routes; live policy actions are filtered against predicted agent and background-traffic arrival times at shared conflict points. The status cards show the chosen action, any yielding/following decision, speed, acceleration, and route progress. Safety TTC readings use predicted route conflicts where applicable.
+
+The server appends every simulation frame as one JSON object per line to `visualization/readings.jsonl`. Each record includes a UTC timestamp, episode/step, raw 47-value sensor observations per agent, controlled and background vehicle positions and motion, proposed and applied actions, decisions, ToM beliefs/action predictions, rewards, and safety metrics. Use the **Readings** button in the visualizer or open `http://localhost:8766/readings.jsonl` to download the current log.
+
 ## Project Layout
 
 - `src/agents/` contains Stage 1 behavior profiles and PPO implementation.

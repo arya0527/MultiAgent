@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Multi-Agent Intersection · Theory of Mind Live</title>
+<style>
+/* ═══════════════════════════════════════════════════════════ */
+/*  GLOBAL                                                      */
+/* ═══════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:        #0a0c14;
+  --bg2:       #0f1320;
+  --bg3:       #141828;
+  --panel:     #161c2e;
+  --panel2:    #1c243a;
+  --border:    #2a3350;
+  --border2:   #3a4a70;
+  --text:      #e2e8f8;
+  --muted:     #6a7a9e;
+  --accent:    #5b8def;
+  --green:     #22e88a;
+  --red:       #ff4b4b;
+  --amber:     #ffb822;
+  --cyan:      #22d4f5;
+  --purple:    #a855f7;
+
+  --agg:       #ff4b4b;
+  --neu:       #4bd4ff;
+  --con:       #7bff4b;
+  --bg-veh:    #ffcc44;
+
+  --font:      'Inter', system-ui, sans-serif;
+  --mono:      'JetBrains Mono', monospace;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  LAYOUT                                                      */
+/* ═══════════════════════════════════════════════════════════ */
+#app{display:grid;grid-template-columns:320px 1fr 320px;grid-template-rows:56px 1fr;height:100vh;gap:0}
+
+/* ── Header ── */
+#header{
+  grid-column:1/-1;
+  display:flex;align-items:center;gap:16px;
+  padding:0 20px;
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  z-index:10;
+}
+#header h1{font-size:16px;font-weight:700;letter-spacing:.5px;color:var(--cyan)}
+#header h1 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:6px}
+.hstat{display:flex;flex-direction:column;gap:2px;margin-left:auto}
+.hstat-row{display:flex;gap:20px}
+.hval{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
+.hlabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.hstat-item{display:flex;flex-direction:column;align-items:flex-end}
+#conn-dot{width:8px;height:8px;border-radius:50%;background:var(--red);transition:background .3s}
+#conn-dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+#controls{display:flex;gap:8px;margin-left:16px}
+.btn{
+  padding:5px 14px;border:1px solid var(--border2);border-radius:6px;
+  background:var(--panel2);color:var(--text);cursor:pointer;
+  font-size:12px;font-family:var(--font);font-weight:500;
+  transition:all .15s;
+}
+.btn:hover{background:var(--border);border-color:var(--accent)}
+.btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+#speed-label{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px}
+#speed-slider{width:80px;accent-color:var(--accent)}
+
+/* ── Left Panel ── */
+#left{
+  background:var(--panel);border-right:1px solid var(--border);
+  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;
+}
+
+/* ── Canvas ── */
+#canvas-wrap{
+  position:relative;background:var(--bg2);display:flex;
+  align-items:center;justify-content:center;overflow:hidden;
+}
+canvas{display:block}
+
+/* ── Right Panel ── */
+#right{
+  background:var(--panel);border-left:1px solid var(--border);
+  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px;
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  SHARED UI COMPONENTS                                        */
+/* ═══════════════════════════════════════════════════════════ */
+.section{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px}
+.section-title{
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;
+  color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:6px;
+}
+.section-title::before{content:'';display:block;width:3px;height:12px;border-radius:2px;background:var(--accent)}
+
+/* agent card */
+.agent-card{border-radius:8px;padding:10px;background:var(--bg3);border:1px solid var(--border);margin-bottom:8px}
+.agent-card:last-child{margin-bottom:0}
+.ac-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ac-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.ac-name{font-weight:600;font-size:13px}
+.ac-behavior{font-size:10px;padding:2px 7px;border-radius:12px;font-weight:600;letter-spacing:.4px}
+
+/* stat rows */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px}
+.stat-item{display:flex;flex-direction:column;gap:1px}
+.stat-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.stat-val{font-family:var(--mono);font-size:12px;font-weight:600}
+
+/* action badge */
+.action-badge{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.5px;
+}
+
+/* belief bars */
+.belief-group{margin-top:8px}
+.belief-row{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.belief-label{font-size:10px;color:var(--muted);width:72px;text-align:right;flex-shrink:0}
+.belief-bar-wrap{flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden}
+.belief-bar{height:100%;border-radius:4px;transition:width .3s ease}
+.belief-pct{font-family:var(--mono);font-size:10px;color:var(--text);width:36px;text-align:right;flex-shrink:0}
+
+/* predicted action bars */
+.pred-bar-wrap{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px}
+.pred-col{display:flex;flex-direction:column;align-items:center;gap:3px}
+.pred-bar-outer{width:100%;height:48px;background:var(--bg);border-radius:4px;position:relative;overflow:hidden;display:flex;align-items:flex-end}
+.pred-bar-inner{width:100%;border-radius:3px 3px 0 0;transition:height .3s ease}
+.pred-label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;text-align:center}
+.pred-pct{font-family:var(--mono);font-size:9px;color:var(--text)}
+
+/* metrics table */
+.metrics-table{width:100%;border-collapse:collapse}
+.metrics-table td{padding:4px 6px;font-size:11px;border-bottom:1px solid var(--border)}
+.metrics-table td:last-child{font-family:var(--mono);text-align:right;font-weight:600}
+.metrics-table tr:last-child td{border-bottom:none}
+.mt-label{color:var(--muted)}
+
+/* ToM section */
+.tom-row{margin-bottom:10px}
+.tom-row-title{
+  font-size:10px;font-weight:600;color:var(--accent);margin-bottom:4px;
+  display:flex;align-items:center;gap:6px;
+}
+.dom-badge{font-size:9px;padding:1px 6px;border-radius:10px;font-weight:700}
+.conf-bar-wrap{flex:1;height:4px;background:var(--bg);border-radius:2px;overflow:hidden}
+.conf-bar{height:100%;border-radius:2px;background:var(--accent);transition:width .3s}
+
+/* SVO gauge */
+.svo-row{display:flex;align-items:center;gap:8px;margin-top:6px}
+.svo-track{flex:1;height:8px;border-radius:4px;background:linear-gradient(to right,var(--agg),var(--muted),var(--con));position:relative}
+.svo-thumb{position:absolute;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:white;border:2px solid var(--bg2);box-shadow:0 0 6px rgba(0,0,0,.4);transition:left .3s ease}
+
+/* adaptation hints */
+.adapt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}
+.adapt-item{background:var(--bg);border-radius:5px;padding:5px;text-align:center}
+.adapt-val{font-family:var(--mono);font-size:12px;font-weight:700}
+.adapt-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}
+
+/* mini timeline */
+#timeline{
+  position:absolute;bottom:0;left:0;right:0;height:38px;
+  background:rgba(10,12,20,.85);backdrop-filter:blur(6px);
+  border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 14px;
+}
+.tl-item{display:flex;flex-direction:column;align-items:center;gap:1px}
+.tl-val{font-family:var(--mono);font-size:11px;font-weight:600}
+.tl-label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.tl-sep{width:1px;height:24px;background:var(--border)}
+
+/* legend */
+#legend{
+  position:absolute;top:10px;right:10px;background:rgba(15,19,32,.88);
+  border:1px solid var(--border);border-radius:8px;padding:10px 12px;
+  backdrop-filter:blur(8px);
+}
+.leg-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px}
+.leg-row:last-child{margin-bottom:0}
+.leg-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.leg-rect{width:12px;height:8px;border-radius:2px;flex-shrink:0;opacity:.7}
+
+/* scroll style */
+#left::-webkit-scrollbar,#right::-webkit-scrollbar{width:4px}
+#left::-webkit-scrollbar-track,#right::-webkit-scrollbar-track{background:transparent}
+#left::-webkit-scrollbar-thumb,#right::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+/* status overlay */
+#overlay{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;
+  background:rgba(10,12,20,.9);backdrop-filter:blur(8px);
+  z-index:20;transition:opacity .4s;
+}
+#overlay.hidden{opacity:0;pointer-events:none}
+#overlay h2{font-size:22px;font-weight:800;color:var(--cyan)}
+#overlay p{color:var(--muted);font-size:14px}
+.spinner{
+  width:36px;height:36px;border:3px solid var(--border);
+  border-top-color:var(--cyan);border-radius:50%;
+  animation:spin 0.8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header id="header">
+  <div id="conn-dot"></div>
+  <h1>Multi-Agent Intersection <span>Theory of Mind · Predictive Safety</span></h1>
+  <div id="controls">
+    <button class="btn" id="btn-pause">⏸ Pause</button>
+    <button class="btn" id="btn-reset">↺ New Ep.</button>
+    <a class="btn" href="/readings.jsonl" download="readings.jsonl">↓ Readings</a>
+    <label id="speed-label">
+      Speed
+      <input type="range" id="speed-slider" min="0.2" max="5" step="0.2" value="1"/>
+      <span id="speed-val">1×</span>
+    </label>
+  </div>
+  <div class="hstat">
+    <div class="hstat-row">
+      <div class="hstat-item"><span class="hval" id="h-ep">—</span><span class="hlabel">Episode</span></div>
+      <div class="hstat-item"><span class="hval" id="h-step">—</span><span class="hlabel">Step</span></div>
+      <div class="hstat-item"><span class="hval" id="h-col" style="color:var(--red)">—</span><span class="hlabel">Collisions</span></div>
+      <div class="hstat-item"><span class="hval" id="h-comp" style="color:var(--green)">—</span><span class="hlabel">Completions</span></div>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════ LEFT PANEL ═══════════ -->
+<aside id="left">
+  <!-- Agent Status -->
+  <div class="section">
+    <div class="section-title">Agent Status</div>
+    <div id="agent-cards"></div>
+  </div>
+
+  <!-- Global Safety Metrics -->
+  <div class="section">
+    <div class="section-title">Safety Metrics</div>
+    <table class="metrics-table" id="safety-table">
+      <tr><td class="mt-label">Agent Collisions</td><td id="m-acol">—</td></tr>
+      <tr><td class="mt-label">Traffic Collisions</td><td id="m-tcol">—</td></tr>
+      <tr><td class="mt-label">Near-Misses</td><td id="m-near">—</td></tr>
+      <tr><td class="mt-label">Min Distance (m)</td><td id="m-dist">—</td></tr>
+      <tr><td class="mt-label">Min TTC (s)</td><td id="m-ttc">—</td></tr>
+    </table>
+  </div>
+
+  <!-- Action Distribution -->
+  <div class="section">
+    <div class="section-title">Action History</div>
+    <div id="action-hist"></div>
+  </div>
+</aside>
+
+<!-- ═══════════ CANVAS ═══════════ -->
+<div id="canvas-wrap">
+  <canvas id="sim-canvas"></canvas>
+
+  <!-- Legend -->
+  <div id="legend">
+    <div class="leg-row"><div class="leg-dot" style="background:var(--agg)"></div>Aggressive (agent_0)</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--neu)"></div>Neutral (agent_1)</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--con)"></div>Conservative (agent_2)</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--bg-veh);opacity:.8"></div>Background Traffic</div>
+    <div style="border-top:1px solid var(--border);margin:6px 0"></div>
+    <div class="leg-row"><div class="leg-rect" style="background:var(--red)"></div>Brake</div>
+    <div class="leg-row"><div class="leg-rect" style="background:var(--amber)"></div>Yield</div>
+    <div class="leg-row"><div class="leg-rect" style="background:var(--neu)"></div>Maintain</div>
+    <div class="leg-row"><div class="leg-rect" style="background:var(--green)"></div>Accelerate</div>
+  </div>
+
+  <!-- Timeline strip -->
+  <div id="timeline">
+    <div class="tl-item"><span class="tl-val" id="tl-ep">Ep 0</span><span class="tl-label">Episode</span></div>
+    <div class="tl-sep"></div>
+    <div class="tl-item"><span class="tl-val" id="tl-step">0</span><span class="tl-label">Step</span></div>
+    <div class="tl-sep"></div>
+    <div class="tl-item"><span class="tl-val" id="tl-ag0">—</span><span class="tl-label">agent_0 reward</span></div>
+    <div class="tl-item"><span class="tl-val" id="tl-ag1">—</span><span class="tl-label">agent_1 reward</span></div>
+    <div class="tl-item"><span class="tl-val" id="tl-ag2">—</span><span class="tl-label">agent_2 reward</span></div>
+    <div class="tl-sep"></div>
+    <div class="tl-item"><span class="tl-val" id="tl-dist">—m</span><span class="tl-label">Min Dist</span></div>
+    <div class="tl-item"><span class="tl-val" id="tl-ttc">—s</span><span class="tl-label">Min TTC</span></div>
+  </div>
+
+  <!-- Waiting overlay -->
+  <div id="overlay">
+    <div class="spinner"></div>
+    <h2>Connecting…</h2>
+    <p>Waiting for simulation server on ws://localhost:8765</p>
+    <p style="font-size:12px;margin-top:4px">Run: <code style="color:var(--cyan)">python visualization/server.py</code></p>
+  </div>
+</div>
+
+<!-- ═══════════ RIGHT PANEL ═══════════ -->
+<aside id="right">
+  <div class="section">
+    <div class="section-title">Theory of Mind — Belief States</div>
+    <div id="tom-panel"></div>
+  </div>
+  <div class="section">
+    <div class="section-title">Predicted Actions (per agent about others)</div>
+    <div id="pred-panel"></div>
+  </div>
+  <div class="section">
+    <div class="section-title">Adaptation Hints</div>
+    <div id="adapt-panel"></div>
+  </div>
+</aside>
+
+</div><!-- /app -->
+
+<script>
+/* ═══════════════════════════════════════════════════════════ */
+/*  CONSTANTS & STATE                                           */
+/* ═══════════════════════════════════════════════════════════ */
+const AGENT_COLORS = {agent_0:'#FF4B4B', agent_1:'#4BD4FF', agent_2:'#7BFF4B'};
+const BEHAVIOR_COLORS = {aggressive:'#FF4B4B', neutral:'#4BD4FF', conservative:'#7BFF4B'};
+const ACTION_COLORS   = {0:'#FF2222', 1:'#FFB822', 2:'#4BD4FF', 3:'#22FF88'};
+const ACTION_NAMES    = {0:'Brake', 1:'Yield', 2:'Maintain', 3:'Accel'};
+const BTYPE_COLORS    = {aggressive:'#FF4B4B', neutral:'#4BD4FF', conservative:'#7BFF4B'};
+
+let lastFrame    = null;
+let paused       = false;
+let simSpeed     = 1.0;
+let actionHist   = {agent_0:[],agent_1:[],agent_2:[]};
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  WEBSOCKET                                                   */
+/* ═══════════════════════════════════════════════════════════ */
+let ws = null;
+function connect(){
+  ws = new WebSocket('ws://localhost:8765');
+  ws.onopen  = () => { document.getElementById('conn-dot').classList.add('live'); hideOverlay(); };
+  ws.onclose = () => {
+    document.getElementById('conn-dot').classList.remove('live');
+    showOverlay('Disconnected — reconnecting…');
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = e => {
+    try { lastFrame = JSON.parse(e.data); render(lastFrame); } catch(ex){}
+  };
+}
+connect();
+
+function sendCmd(obj){ if(ws && ws.readyState===1) ws.send(JSON.stringify(obj)); }
+
+/* ── controls ── */
+const btnPause = document.getElementById('btn-pause');
+btnPause.onclick = () => {
+  paused = !paused;
+  btnPause.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  btnPause.classList.toggle('active', paused);
+  sendCmd({cmd: paused ? 'pause' : 'resume'});
+};
+document.getElementById('btn-reset').onclick = () => sendCmd({cmd:'reset'});
+const speedSlider = document.getElementById('speed-slider');
+const speedVal    = document.getElementById('speed-val');
+speedSlider.oninput = () => {
+  simSpeed = parseFloat(speedSlider.value);
+  speedVal.textContent = simSpeed.toFixed(1) + '×';
+  sendCmd({cmd:'speed', value:simSpeed});
+};
+
+/* ── overlay ── */
+function showOverlay(msg){
+  const ov = document.getElementById('overlay');
+  ov.classList.remove('hidden');
+  ov.querySelector('p').textContent = msg || '';
+}
+function hideOverlay(){ document.getElementById('overlay').classList.add('hidden'); }
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  CANVAS SETUP                                               */
+/* ═══════════════════════════════════════════════════════════ */
+const canvas = document.getElementById('sim-canvas');
+const ctx    = canvas.getContext('2d');
+
+function resizeCanvas(){
+  const wrap = document.getElementById('canvas-wrap');
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight - 38; // minus timeline
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  ROAD DRAWING                                               */
+/* ═══════════════════════════════════════════════════════════ */
+function worldToScreen(wx, wy, scale, cx, cy){
+  return [cx + wx * scale, cy - wy * scale];
+}
+
+function drawRoad(cfg, scale, cx, cy){
+  const hw   = cfg.intersection_half_width;
+  const AL   = cfg.approach_length;
+  const lw   = cfg.lane_width;
+  const lanes = cfg.lanes_per_approach;
+  const roadW = 2 * lanes * lw;
+
+  ctx.save();
+
+  // -- road surface --
+  const dirs = [
+    {from:[0,-AL-hw], to:[0, hw],  axis:'v', side:-1},
+    {from:[0, AL+hw], to:[0,-hw],  axis:'v', side: 1},
+    {from:[-AL-hw,0], to:[hw,  0], axis:'h', side: 1},
+    {from:[ AL+hw,0], to:[-hw, 0], axis:'h', side:-1},
+  ];
+
+  // Approach roads
+  function drawApproach(wx1,wy1,wx2,wy2){
+    const [sx1,sy1] = worldToScreen(wx1,wy1,scale,cx,cy);
+    const [sx2,sy2] = worldToScreen(wx2,wy2,scale,cx,cy);
+    const isV = wx1===wx2;
+    const halfPx = roadW*scale/2;
+    ctx.beginPath();
+    if(isV){
+      ctx.rect(sx1-halfPx, Math.min(sy1,sy2), halfPx*2, Math.abs(sy2-sy1));
+    } else {
+      ctx.rect(Math.min(sx1,sx2), sy1-halfPx, Math.abs(sx2-sx1), halfPx*2);
+    }
+    ctx.fillStyle='#1e2433';
+    ctx.fill();
+  }
+  drawApproach(0,  hw, 0, AL+hw);
+  drawApproach(0, -hw, 0,-(AL+hw));
+  drawApproach( hw, 0, AL+hw, 0);
+  drawApproach(-hw, 0,-(AL+hw), 0);
+
+  // Intersection box
+  const [bx1,by1] = worldToScreen(-hw,  hw, scale, cx, cy);
+  const [bx2,by2] = worldToScreen( hw, -hw, scale, cx, cy);
+  ctx.fillStyle='#1e2433';
+  ctx.fillRect(bx1, by1, bx2-bx1, by2-by1);
+
+  // Curb lines
+  function strokeBoundary(x1,y1,x2,y2){
+    const [sx1,sy1] = worldToScreen(x1,y1,scale,cx,cy);
+    const [sx2,sy2] = worldToScreen(x2,y2,scale,cx,cy);
+    ctx.beginPath();
+    ctx.moveTo(sx1,sy1); ctx.lineTo(sx2,sy2);
+    ctx.strokeStyle='#3a4a60';ctx.lineWidth=1.5;ctx.stroke();
+  }
+  const hw2=hw, rw2=roadW/2;
+  // N approach
+  strokeBoundary(-rw2, hw2, -rw2, AL+hw2);
+  strokeBoundary( rw2, hw2,  rw2, AL+hw2);
+  // S approach
+  strokeBoundary(-rw2,-hw2,-rw2,-(AL+hw2));
+  strokeBoundary( rw2,-hw2, rw2,-(AL+hw2));
+  // E approach
+  strokeBoundary(hw2,-rw2, AL+hw2,-rw2);
+  strokeBoundary(hw2, rw2, AL+hw2, rw2);
+  // W approach
+  strokeBoundary(-hw2,-rw2,-(AL+hw2),-rw2);
+  strokeBoundary(-hw2, rw2,-(AL+hw2), rw2);
+
+  // Centerline and lane dividers (dashed)
+  ctx.setLineDash([8*scale, 6*scale]);
+  ctx.strokeStyle='#3d4f70';ctx.lineWidth=1;
+  const laneMarks = [0];
+  for(let lane=1; lane<lanes; lane++){
+    laneMarks.push(lane*lw, -lane*lw);
+  }
+  for(const offset of laneMarks){
+    ctx.beginPath();
+    ctx.moveTo(...worldToScreen(offset, hw2+2, scale,cx,cy));
+    ctx.lineTo(...worldToScreen(offset, AL+hw2,scale,cx,cy));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(...worldToScreen(offset,-hw2-2,scale,cx,cy));
+    ctx.lineTo(...worldToScreen(offset,-(AL+hw2),scale,cx,cy));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(...worldToScreen( hw2+2,offset,scale,cx,cy));
+    ctx.lineTo(...worldToScreen( AL+hw2,offset,scale,cx,cy));
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(...worldToScreen(-hw2-2,offset,scale,cx,cy));
+    ctx.lineTo(...worldToScreen(-(AL+hw2),offset,scale,cx,cy));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // Stop lines
+  ctx.strokeStyle='#ffffff44'; ctx.lineWidth=2;
+  const sl = hw2;
+  // N
+  ctx.beginPath();ctx.moveTo(...worldToScreen(-rw2,sl,scale,cx,cy));ctx.lineTo(...worldToScreen(rw2,sl,scale,cx,cy));ctx.stroke();
+  // S
+  ctx.beginPath();ctx.moveTo(...worldToScreen(-rw2,-sl,scale,cx,cy));ctx.lineTo(...worldToScreen(rw2,-sl,scale,cx,cy));ctx.stroke();
+  // E
+  ctx.beginPath();ctx.moveTo(...worldToScreen(sl,-rw2,scale,cx,cy));ctx.lineTo(...worldToScreen(sl,rw2,scale,cx,cy));ctx.stroke();
+  // W
+  ctx.beginPath();ctx.moveTo(...worldToScreen(-sl,-rw2,scale,cx,cy));ctx.lineTo(...worldToScreen(-sl,rw2,scale,cx,cy));ctx.stroke();
+
+  // Intersection grid lines (subtle)
+  ctx.strokeStyle='#2a3450'; ctx.lineWidth=0.5;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.moveTo(...worldToScreen(-hw,0,scale,cx,cy));ctx.lineTo(...worldToScreen(hw,0,scale,cx,cy));ctx.stroke();
+  ctx.beginPath();ctx.moveTo(...worldToScreen(0,-hw,scale,cx,cy));ctx.lineTo(...worldToScreen(0,hw,scale,cx,cy));ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Intersection border glow
+  ctx.strokeStyle='#5b8def33'; ctx.lineWidth=2;
+  const [ibx,iby] = worldToScreen(-hw,hw,scale,cx,cy);
+  const ibW = (hw*2)*scale, ibH=(hw*2)*scale;
+  ctx.strokeRect(ibx, iby, ibW, ibH);
+
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  VEHICLE DRAWING                                             */
+/* ═══════════════════════════════════════════════════════════ */
+function drawVehicle(vx, vy, heading, vw, vh, color, label, actionColor, isAgent, scale){
+  const px = vx * scale;
+  const py = vy * scale;
+  const pw = vw * scale;
+  const ph = vh * scale;
+
+  ctx.save();
+  ctx.translate(0, 0); // already translated by caller
+  ctx.save();
+  ctx.translate(px, -py);
+  ctx.rotate(-heading);
+
+  // Body
+  const grd = ctx.createLinearGradient(-ph/2,-pw/2, ph/2,pw/2);
+  grd.addColorStop(0, color + 'dd');
+  grd.addColorStop(1, color + '88');
+  ctx.fillStyle = grd;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = isAgent ? 12 : 4;
+  ctx.beginPath();
+  roundRect(ctx, -ph/2, -pw/2, ph, pw, Math.min(pw,ph)*0.2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Windshield
+  ctx.fillStyle = '#111827cc';
+  roundRect(ctx, ph*0.05, -pw*0.38, ph*0.35, pw*0.76, 2);
+  ctx.fill();
+
+  // Headlights (front = +x in heading)
+  if(isAgent){
+    ctx.fillStyle = '#ffffffcc';
+    ctx.beginPath(); ctx.arc(ph*0.42,  pw*0.3, pw*0.09, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(ph*0.42, -pw*0.3, pw*0.09, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Action color stripe on roof
+  ctx.fillStyle = actionColor + 'cc';
+  roundRect(ctx, -ph*0.15, -pw*0.36, ph*0.3, pw*0.72, 2);
+  ctx.fill();
+
+  // Direction arrow for agents
+  if(isAgent){
+    ctx.fillStyle = '#ffffffcc';
+    ctx.beginPath();
+    ctx.moveTo( ph*0.36, 0);
+    ctx.lineTo( ph*0.20, -pw*0.22);
+    ctx.lineTo( ph*0.20,  pw*0.22);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // Label (world-aligned, above vehicle)
+  if(label){
+    const [lx, ly] = [px, -py - (ph*0.5 + 10)];
+    ctx.fillStyle = color;
+    ctx.font = `bold ${Math.max(8,11*scale/1.5)}px Inter,sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(label, lx, ly);
+  }
+
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r);
+  ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  MAIN RENDER                                                 */
+/* ═══════════════════════════════════════════════════════════ */
+function render(frame){
+  if(!frame) return;
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2;
+
+  // Scale: fit approach_length*2 + margin into canvas
+  const worldExtent = (frame.config.approach_length + frame.config.intersection_half_width) * 2.2;
+  const scale = Math.min(W, H) / worldExtent;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Background
+  ctx.fillStyle = '#080b14';
+  ctx.fillRect(0,0,W,H);
+
+  // Center of world at (cx, cy)
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  drawRoad(frame.config, scale, 0, 0);
+
+  // Background vehicles
+  for(const bv of frame.bg_vehicles){
+    drawVehicle(bv.x, bv.y, bv.heading, 1.8, 4.5,
+      '#ffcc44', null, '#ffcc4488', false, scale);
+  }
+
+  // Learning agents
+  for(const v of frame.vehicles){
+    const actionColor = ACTION_COLORS[v.action] || '#ffffff';
+    const label = `${v.id.replace('agent_','')} · ${v.action_name.toUpperCase()}`;
+    if(!v.completed && !v.collided){
+      drawVehicle(v.x, v.y, v.heading, 1.8, 4.5,
+        v.color, label, actionColor, true, scale);
+    }
+    // Collision flash
+    if(v.collided){
+      const [px,py] = [v.x*scale, -v.y*scale];
+      ctx.save();
+      ctx.translate(px, py);
+      const gr = ctx.createRadialGradient(0,0,0, 0,0,20*scale);
+      gr.addColorStop(0, '#ff440088');
+      gr.addColorStop(1, 'transparent');
+      ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(0,0,20*scale,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+
+  updateHUD(frame);
+  updateLeft(frame);
+  updateRight(frame);
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  HUD UPDATES                                                */
+/* ═══════════════════════════════════════════════════════════ */
+function updateHUD(f){
+  document.getElementById('h-ep').textContent   = f.episode;
+  document.getElementById('h-step').textContent = f.step;
+  document.getElementById('h-col').textContent  = f.total_collisions;
+  document.getElementById('h-comp').textContent = f.total_completions;
+
+  document.getElementById('tl-ep').textContent   = 'Ep ' + f.episode;
+  document.getElementById('tl-step').textContent = f.step;
+
+  for(const v of f.vehicles){
+    const idx = v.id.replace('agent_','');
+    const el = document.getElementById(`tl-ag${idx}`);
+    if(el) el.textContent = (v.ep_reward >= 0 ? '+' : '') + v.ep_reward.toFixed(1);
+  }
+
+  const g = f.global;
+  document.getElementById('tl-dist').textContent = g.min_distance < 999 ? g.min_distance.toFixed(1)+'m' : '—';
+  document.getElementById('tl-ttc').textContent  = g.min_ttc < 99 ? g.min_ttc.toFixed(1)+'s' : '—';
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  LEFT PANEL                                                 */
+/* ═══════════════════════════════════════════════════════════ */
+function updateLeft(f){
+  // Agent cards
+  const cardsDiv = document.getElementById('agent-cards');
+  let html = '';
+  for(const v of f.vehicles){
+    const bc = BEHAVIOR_COLORS[v.behavior] || '#fff';
+    const ac = ACTION_COLORS[v.action];
+    const status = v.collided ? '💥 Collided' : v.completed ? '✅ Done' : '🚗 Active';
+    html += `
+    <div class="agent-card">
+      <div class="ac-header">
+        <div class="ac-dot" style="background:${v.color}"></div>
+        <span class="ac-name">${v.id}</span>
+        <span class="ac-behavior" style="background:${bc}22;color:${bc}">${v.behavior.toUpperCase()}</span>
+        <span style="margin-left:auto;font-size:11px">${status}</span>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-item"><span class="stat-label">Speed</span><span class="stat-val" style="color:var(--cyan)">${v.speed.toFixed(2)} m/s</span></div>
+        <div class="stat-item"><span class="stat-label">Accel</span><span class="stat-val" style="color:${v.acceleration>0?'var(--green)':v.acceleration<0?'var(--red)':'var(--muted)'}">${v.acceleration.toFixed(2)} m/s²</span></div>
+        <div class="stat-item"><span class="stat-label">Progress</span><span class="stat-val">${v.progress.toFixed(1)} m</span></div>
+        <div class="stat-item"><span class="stat-label">Reward</span><span class="stat-val" style="color:${v.ep_reward>=0?'var(--green)':'var(--red)'}">${v.ep_reward.toFixed(2)}</span></div>
+        <div class="stat-item"><span class="stat-label">Action</span>
+          <span class="action-badge" style="background:${ac}22;color:${ac}">${v.action_name}</span>
+        </div>
+        <div class="stat-item"><span class="stat-label">Approach</span><span class="stat-val">${v.approach} → ${v.maneuver}</span></div>
+        <div class="stat-item" style="grid-column:1/-1"><span class="stat-label">Decision</span><span class="stat-val">${v.decision}</span></div>
+      </div>
+    </div>`;
+    // track action history
+    if(!actionHist[v.id]) actionHist[v.id] = [];
+    actionHist[v.id].push(v.action);
+    if(actionHist[v.id].length > 80) actionHist[v.id].shift();
+  }
+  cardsDiv.innerHTML = html;
+
+  // Safety metrics
+  const g = f.global;
+  document.getElementById('m-acol').textContent = g.agent_collisions;
+  document.getElementById('m-tcol').textContent = g.traffic_collisions;
+  document.getElementById('m-near').textContent = g.near_collisions;
+  document.getElementById('m-dist').textContent = g.min_distance < 999 ? g.min_distance.toFixed(2) : '—';
+  document.getElementById('m-ttc').textContent  = g.min_ttc < 99  ? g.min_ttc.toFixed(2)  : '—';
+
+  // Action mini-histograms (sparkline bars)
+  const histDiv = document.getElementById('action-hist');
+  let hhtml = '';
+  const ACTIONS = [{id:0,name:'Brake',c:'var(--red)'},{id:1,name:'Yield',c:'var(--amber)'},{id:2,name:'Maintain',c:'var(--neu)'},{id:3,name:'Accel',c:'var(--green)'}];
+  for(const v of f.vehicles){
+    const hist = actionHist[v.id] || [];
+    const counts = [0,0,0,0];
+    hist.forEach(a => counts[a]++);
+    const total = hist.length || 1;
+    hhtml += `<div style="margin-bottom:8px">
+      <div style="font-size:10px;font-weight:600;color:${v.color};margin-bottom:4px">${v.id}</div>
+      <div style="display:flex;gap:4px;height:32px;align-items:flex-end">`;
+    ACTIONS.forEach(ac => {
+      const pct = counts[ac.id]/total;
+      hhtml += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+        <div style="width:100%;background:${ac.c}44;border-radius:3px 3px 0 0;height:${Math.round(pct*28)+2}px;min-height:2px;transition:height .3s"></div>
+        <span style="font-size:8px;color:var(--muted)">${ac.name[0]}</span>
+      </div>`;
+    });
+    hhtml += `</div></div>`;
+  }
+  histDiv.innerHTML = hhtml;
+}
+
+/* ═══════════════════════════════════════════════════════════ */
+/*  RIGHT PANEL — ToM                                          */
+/* ═══════════════════════════════════════════════════════════ */
+function updateRight(f){
+  const tom = f.tom;
+  const agents = f.vehicles.map(v => v.id);
+
+  // ── Belief States ──
+  let tomHtml = '';
+  for(const egoId of agents){
+    if(!tom[egoId]) continue;
+    const egoColor = AGENT_COLORS[egoId];
+    tomHtml += `<div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:${egoColor};margin-bottom:6px">
+        ${egoId} believes about:
+      </div>`;
+    for(const [otherId, belief] of Object.entries(tom[egoId])){
+      const dom   = belief.dominant_behavior;
+      const conf  = belief.confidence;
+      const domC  = BTYPE_COLORS[dom] || '#fff';
+      tomHtml += `<div class="tom-row">
+        <div class="tom-row-title">
+          <span style="color:${AGENT_COLORS[otherId]||'#aaa'}">${otherId}</span>
+          <span class="dom-badge" style="background:${domC}22;color:${domC}">${dom.toUpperCase()}</span>
+          <div class="conf-bar-wrap"><div class="conf-bar" style="width:${(conf*100).toFixed(1)}%"></div></div>
+          <span style="font-size:9px;color:var(--muted);font-family:var(--mono)">${(conf*100).toFixed(0)}%</span>
+        </div>
+        <div class="belief-group">`;
+      for(const [btype, bval] of Object.entries(belief.beliefs)){
+        const bc = BTYPE_COLORS[btype] || '#aaa';
+        tomHtml += `<div class="belief-row">
+          <span class="belief-label">${btype}</span>
+          <div class="belief-bar-wrap"><div class="belief-bar" style="width:${(bval*100).toFixed(1)}%;background:${bc}"></div></div>
+          <span class="belief-pct">${(bval*100).toFixed(1)}%</span>
+        </div>`;
+      }
+      // SVO
+      const svo = belief.svo;
+      const svoLeft = ((svo + 1)/2 * 100).toFixed(1);
+      const rt  = belief.risk_tolerance;
+      tomHtml += `</div>
+        <div class="svo-row">
+          <span style="font-size:9px;color:var(--agg)">Aggressive</span>
+          <div class="svo-track"><div class="svo-thumb" style="left:${svoLeft}%"></div></div>
+          <span style="font-size:9px;color:var(--con)">Cooperative</span>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <span class="stat-label">Risk Tolerance:</span>
+          <span style="font-family:var(--mono);font-size:10px;color:${rt>0.6?'var(--red)':rt<0.3?'var(--green)':'var(--amber)'}">${(rt*100).toFixed(0)}%</span>
+          <span class="stat-label">SVO:</span>
+          <span style="font-family:var(--mono);font-size:10px;color:${svo<0?'var(--red)':'var(--green)'}">${svo.toFixed(3)}</span>
+        </div>
+      </div>`;
+    }
+    tomHtml += '</div>';
+  }
+  document.getElementById('tom-panel').innerHTML = tomHtml;
+
+  // ── Predicted Actions ──
+  let predHtml = '';
+  for(const egoId of agents){
+    if(!tom[egoId]) continue;
+    const egoColor = AGENT_COLORS[egoId];
+    predHtml += `<div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:${egoColor};margin-bottom:6px">${egoId} predicts:</div>`;
+    for(const [otherId, belief] of Object.entries(tom[egoId])){
+      const pa = belief.predicted_actions;
+      predHtml += `<div style="margin-bottom:8px">
+        <div style="font-size:10px;color:${AGENT_COLORS[otherId]||'#aaa'};margin-bottom:4px">${otherId}</div>
+        <div class="pred-bar-wrap">`;
+      const aNames = ['brake','yield','maintain','accelerate'];
+      const aColors = ['#FF2222','#FFB822','#4BD4FF','#22FF88'];
+      aNames.forEach((n,i)=>{
+        const p = pa[n] || 0;
+        predHtml += `<div class="pred-col">
+          <span class="pred-pct">${(p*100).toFixed(0)}%</span>
+          <div class="pred-bar-outer">
+            <div class="pred-bar-inner" style="height:${(p*100).toFixed(1)}%;background:${aColors[i]}88"></div>
+          </div>
+          <span class="pred-label">${n[0].toUpperCase()}</span>
+        </div>`;
+      });
+      predHtml += '</div></div>';
+    }
+    predHtml += '</div>';
+  }
+  document.getElementById('pred-panel').innerHTML = predHtml;
+
+  // ── Adaptation Hints ──
+  let adaptHtml = '';
+  for(const egoId of agents){
+    if(!tom[egoId]) continue;
+    const egoColor = AGENT_COLORS[egoId];
+    adaptHtml += `<div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:700;color:${egoColor};margin-bottom:6px">${egoId} adapts to:</div>`;
+    for(const [otherId, belief] of Object.entries(tom[egoId])){
+      const ad = belief.adaptation || {};
+      const yb = ad.yield_bias || 0;
+      const gb = ad.gap_buffer || 0;
+      const sa = ad.speed_adj || 0;
+      adaptHtml += `<div style="margin-bottom:6px">
+        <div style="font-size:10px;color:${AGENT_COLORS[otherId]||'#aaa'};margin-bottom:4px">${otherId}</div>
+        <div class="adapt-grid">
+          <div class="adapt-item">
+            <div class="adapt-val" style="color:var(--amber)">${(yb*100).toFixed(0)}%</div>
+            <div class="adapt-lbl">Yield Bias</div>
+          </div>
+          <div class="adapt-item">
+            <div class="adapt-val" style="color:var(--cyan)">${(gb*100).toFixed(0)}%</div>
+            <div class="adapt-lbl">Gap Buffer</div>
+          </div>
+          <div class="adapt-item">
+            <div class="adapt-val" style="color:${sa>=0?'var(--green)':'var(--red)'}">${sa>=0?'+':''}${(sa*100).toFixed(0)}%</div>
+            <div class="adapt-lbl">Speed Adj</div>
+          </div>
+        </div>
+      </div>`;
+    }
+    adaptHtml += '</div>';
+  }
+  document.getElementById('adapt-panel').innerHTML = adaptHtml;
+}
+</script>
+</body>
+</html>
