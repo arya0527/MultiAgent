@@ -37,6 +37,8 @@ import torch.nn as nn
 from torch.distributions import Categorical
 
 from src.stage2.intersection_env import (
+    ACCELERATE,
+    MAINTAIN,
     Stage2IntersectionEnv,
     Stage2Config,
     SELECTED_MODELS,
@@ -171,13 +173,13 @@ SIM_STATE = SimState()
 
 AGENT_COLORS = {
     "agent_0": "#FF4B4B",   # aggressive – red
-    "agent_1": "#4BD4FF",   # neutral    – cyan
+    "agent_1": "#3B82F6",   # neutral    – blue
     "agent_2": "#7BFF4B",   # conservative – green
 }
 
 BEHAVIOR_COLORS = {
     "aggressive":   "#FF4B4B",
-    "neutral":      "#4BD4FF",
+    "neutral":      "#3B82F6",
     "conservative": "#7BFF4B",
 }
 
@@ -411,6 +413,31 @@ def _predictive_safety_filter(
     return env.filter_actions(proposed_actions, predicted_action_probs)
 
 
+def _keep_agents_moving(
+    env: Stage2IntersectionEnv,
+    policy_actions: Dict[str, int],
+) -> tuple[Dict[str, int], set[str]]:
+    """Replace policy stops with motion requests; safety filtering stays active."""
+    actions = dict(policy_actions)
+    overridden = set()
+
+    for agent_id, action in policy_actions.items():
+        vehicle = env.vehicles[agent_id]
+        if vehicle.completed or vehicle.collided or action == ACCELERATE:
+            continue
+
+        movement_action = (
+            ACCELERATE
+            if env.behaviors[agent_id] == "aggressive" or vehicle.speed <= 0.1
+            else MAINTAIN
+        )
+        if movement_action != action:
+            actions[agent_id] = movement_action
+            overridden.add(agent_id)
+
+    return actions, overridden
+
+
 # ---------------------------------------------------------------------------
 # Simulation thread
 # ---------------------------------------------------------------------------
@@ -456,7 +483,7 @@ def run_simulation(state: SimState) -> None:
                 continue
 
             # ---- select actions via Stage-1 policies ----
-            proposed_actions: Dict[str, int] = {}
+            policy_actions: Dict[str, int] = {}
             for agent_id in env.agents:
                 raw_obs  = np.asarray(obs_dict[agent_id], dtype=np.float32)
                 projected = _project_stage2_observation(raw_obs)
@@ -475,11 +502,22 @@ def run_simulation(state: SimState) -> None:
                     action_t, _, _, _ = policies[agent_id].get_action(
                         obs_t, deterministic=True
                     )
-                proposed_actions[agent_id] = int(action_t.item())
+                policy_actions[agent_id] = int(action_t.item())
 
-            actions, decisions = _predictive_safety_filter(
-                env, proposed_actions, tom_manager
+            movement_actions, overridden_agents = _keep_agents_moving(
+                env,
+                policy_actions,
             )
+            actions, decisions = _predictive_safety_filter(
+                env, movement_actions, tom_manager
+            )
+            for agent_id in overridden_agents:
+                if actions[agent_id] == movement_actions[agent_id]:
+                    decisions[agent_id] = {
+                        "aggressive": "Aggressive drive",
+                        "neutral": "Neutral cruise",
+                        "conservative": "Conservative cruise",
+                    }[env.behaviors[agent_id]]
 
             # ---- Theory of Mind update ----
             tom_manager.update_all(actions)
@@ -506,7 +544,7 @@ def run_simulation(state: SimState) -> None:
                 env=env,
                 observations=obs_dict,
                 actions=actions,
-                proposed_actions=proposed_actions,
+                proposed_actions=policy_actions,
                 decisions=decisions,
                 rewards=rewards,
                 infos=infos,

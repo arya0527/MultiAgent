@@ -969,6 +969,17 @@ def main() -> None:
                             >= headway_env.config.minimum_same_lane_spawn_gap,
                             f"Unsafe same-lane headway at seed {seed}.",
                         )
+            for index, first in enumerate(headway_env.background_vehicles):
+                for second in headway_env.background_vehicles[index + 1:]:
+                    if (
+                        first.approach == second.approach
+                        and first.lane == second.lane
+                    ):
+                        check(
+                            abs(first.progress - second.progress)
+                            >= headway_env.config.minimum_same_lane_spawn_gap,
+                            f"Unsafe background headway at seed {seed}.",
+                        )
 
     run_test(
         "Same-lane traffic spawn headway (100 seeds)",
@@ -1012,6 +1023,195 @@ def main() -> None:
     run_test(
         "Background same-lane headway",
         test_background_same_lane_headway,
+    )
+
+    # --------------------------------------------------------
+    # 26. Background vehicles yield to conflicting traffic
+    # --------------------------------------------------------
+    def test_background_vehicles_yield_to_conflicting_traffic():
+        traffic_env = Stage2IntersectionEnv(
+            seed=42,
+            background_traffic=True,
+        )
+        traffic_env.reset(seed=42)
+        traffic_env.vehicles.clear()
+
+        conflict_pair = None
+        for index, first in enumerate(traffic_env.background_vehicles):
+            for second in traffic_env.background_vehicles[index + 1:]:
+                first_conflict, second_conflict = (
+                    traffic_env._get_conflict_distances(first, second)
+                )
+                if (
+                    first_conflict is not None
+                    and first_conflict >= 30.0
+                    and second_conflict is not None
+                    and second_conflict >= 38.0
+                ):
+                    conflict_pair = (
+                        first,
+                        second,
+                        first_conflict,
+                        second_conflict,
+                    )
+                    break
+            if conflict_pair is not None:
+                break
+
+        check(
+            conflict_pair is not None,
+            "Seed 42 did not generate a conflicting background-traffic pair.",
+        )
+        first, second, first_conflict, second_conflict = conflict_pair
+        for traffic in traffic_env.background_vehicles:
+            if traffic is not first and traffic is not second:
+                traffic.completed = True
+
+        first.progress = first_conflict - 20.0
+        second.progress = second_conflict - 28.0
+        for traffic in (first, second):
+            traffic.x, traffic.y = traffic_env._position_at_progress(
+                traffic,
+                traffic.progress,
+            )
+            traffic.heading = traffic_env._heading_at_progress(
+                traffic.route_points,
+                traffic.progress,
+            )
+            traffic.speed = 8.0
+
+        check(
+            not traffic_env._is_in_intersection(second),
+            "The yielding vehicle should start outside the intersection.",
+        )
+        check(
+            traffic_env._background_acceleration(second)
+            == traffic_env.config.yield_acceleration,
+            "Later-arriving background traffic did not yield.",
+        )
+
+    run_test(
+        "Background traffic yields to route conflicts",
+        test_background_vehicles_yield_to_conflicting_traffic,
+    )
+
+    # --------------------------------------------------------
+    # 27. A stopped car ahead blocks an acceleration request
+    # --------------------------------------------------------
+    def test_controlled_agent_yields_to_stopped_car_ahead():
+        following_env = Stage2IntersectionEnv(
+            seed=42,
+            background_traffic=False,
+        )
+        following_env.reset(seed=42)
+        ego = following_env.vehicles["agent_2"]
+        leader = following_env.vehicles["agent_1"]
+        following_env.vehicles["agent_0"].completed = True
+
+        leader.approach = ego.approach
+        leader.lane = ego.lane
+        leader.maneuver = ego.maneuver
+        leader.route_points = ego.route_points
+        leader.route_points_np = ego.route_points_np
+        leader.route_segment_lengths = ego.route_segment_lengths
+        leader.route_cumulative_lengths = ego.route_cumulative_lengths
+        leader.route_distance = ego.route_distance
+        ego.progress = 0.0
+        leader.progress = 7.0
+        ego.speed = 0.0
+        leader.speed = 0.0
+        for vehicle in (ego, leader):
+            vehicle.x, vehicle.y = following_env._position_at_progress(
+                vehicle,
+                vehicle.progress,
+            )
+            vehicle.heading = following_env._heading_at_progress(
+                vehicle.route_points,
+                vehicle.progress,
+            )
+
+        actions, decisions = following_env.filter_actions(
+            {
+                agent_id: ACCELERATE
+                for agent_id in following_env.agents
+            }
+        )
+        check(
+            actions["agent_2"] == YIELD,
+            "The agent accelerated into a stopped vehicle ahead.",
+        )
+        check(
+            decisions["agent_2"].startswith("Following agent_1"),
+            "The front-car hold was not reported as a following decision.",
+        )
+
+    run_test(
+        "Controlled agent yields to stopped car ahead",
+        test_controlled_agent_yields_to_stopped_car_ahead,
+    )
+
+    # --------------------------------------------------------
+    # 28. Conservative profile uses a larger following gap
+    # --------------------------------------------------------
+    def test_behavior_profiles_have_distinct_following_gaps():
+        def action_for_following_distance(agent_id: str) -> int:
+            profile_env = Stage2IntersectionEnv(
+                seed=42,
+                background_traffic=False,
+            )
+            profile_env.reset(seed=42)
+            ego = profile_env.vehicles[agent_id]
+            leader = profile_env.vehicles["agent_0"]
+            for other_id, other in profile_env.vehicles.items():
+                if other_id not in (agent_id, "agent_0"):
+                    other.completed = True
+
+            leader.approach = ego.approach
+            leader.lane = ego.lane
+            leader.maneuver = ego.maneuver
+            leader.route_points = ego.route_points
+            leader.route_points_np = ego.route_points_np
+            leader.route_segment_lengths = ego.route_segment_lengths
+            leader.route_cumulative_lengths = ego.route_cumulative_lengths
+            leader.route_distance = ego.route_distance
+            ego.progress = 0.0
+            leader.progress = 9.0
+            ego.speed = 1.0
+            leader.speed = 0.0
+            for vehicle in (ego, leader):
+                vehicle.x, vehicle.y = profile_env._position_at_progress(
+                    vehicle,
+                    vehicle.progress,
+                )
+                vehicle.heading = profile_env._heading_at_progress(
+                    vehicle.route_points,
+                    vehicle.progress,
+                )
+
+            actions, _ = profile_env.filter_actions(
+                {
+                    current_id: ACCELERATE
+                    for current_id in profile_env.agents
+                },
+                {
+                    current_id: np.asarray([0.0, 0.0, 0.0, 1.0])
+                    for current_id in profile_env.agents
+                },
+            )
+            return actions[agent_id]
+
+        check(
+            action_for_following_distance("agent_1") == ACCELERATE,
+            "Neutral behavior stopped at the conservative following distance.",
+        )
+        check(
+            action_for_following_distance("agent_2") == YIELD,
+            "Conservative behavior did not yield at its larger following distance.",
+        )
+
+    run_test(
+        "Behavior profiles use distinct following gaps",
+        test_behavior_profiles_have_distinct_following_gaps,
     )
 
     print()

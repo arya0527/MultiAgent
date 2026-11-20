@@ -124,6 +124,8 @@ Open `http://localhost:8766/` in a browser. The interface shows:
 - Safety and TTC readings
 - Theory-of-mind predictions and belief summaries
 
+The visualizer keeps the agents' styles distinct: red/aggressive presses forward, blue/neutral generally maintains speed, and green/conservative uses a larger following gap. Learned stop proposals are translated into these motion styles while the existing safety filter still applies braking or yielding for a close same-lane vehicle or a predicted route conflict. Original policy proposals remain available in the readings; model checkpoints and training behavior are unchanged.
+
 The server writes each simulation frame to `visualization/readings.jsonl`. Each line is a JSON object containing the UTC timestamp, episode and step, 47-value observations for each controlled agent, vehicle positions and motion, actions, rewards, decisions, beliefs, predictions, and safety metrics.
 
 The current log can also be downloaded from `http://localhost:8766/readings.jsonl`.

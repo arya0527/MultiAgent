@@ -37,6 +37,12 @@ BEHAVIORS = (
     "conservative",
 )
 
+FOLLOWING_GAP_PROFILES = {
+    "aggressive": (6.0, 4.0, 1.0, 1.0),
+    "neutral": (8.0, 5.0, 1.2, 2.0),
+    "conservative": (11.0, 7.0, 1.5, 4.0),
+}
+
 
 # ============================================================
 # SELECTED STAGE-1 AGENTS
@@ -612,6 +618,16 @@ class Stage2IntersectionEnv:
                 ):
                     return True
 
+        for index, first in enumerate(self.background_vehicles):
+            for second in self.background_vehicles[index + 1:]:
+                if (
+                    first.approach == second.approach
+                    and first.lane == second.lane
+                    and abs(first.progress - second.progress)
+                    < self.config.minimum_same_lane_spawn_gap
+                ):
+                    return True
+
         return False
 
     # ========================================================
@@ -862,18 +878,36 @@ class Stage2IntersectionEnv:
                     math.cos(ego.heading - other.heading) > 0.5
                 )
                 closing_speed = ego.speed - other.speed
-                required_gap = max(8.0, 5.0 + ego.speed * 1.2)
+                other_acceleration = (
+                    predicted_acceleration[other.vehicle_id]
+                    if other.is_learning
+                    else self._background_acceleration(other)
+                )
+                closing_acceleration = (
+                    ego_acceleration - other_acceleration
+                )
+                min_gap, base_gap, speed_factor, safety_margin = (
+                    FOLLOWING_GAP_PROFILES[self.behaviors[agent_id]]
+                )
+                stopping_gap = (
+                    ego.speed**2
+                    / (2.0 * abs(self.config.max_braking))
+                    + 2.0
+                )
+                required_gap = max(
+                    min_gap,
+                    base_gap + ego.speed * speed_factor,
+                    stopping_gap + safety_margin,
+                )
                 if (
                     same_direction
                     and 0.0 < longitudinal_gap < required_gap
                     and lateral_gap < self.config.lane_width
-                    and closing_speed > 0.0
-                ):
-                    stopping_gap = (
-                        ego.speed**2
-                        / (2.0 * abs(self.config.max_braking))
-                        + 2.0
+                    and (
+                        closing_speed > 0.0
+                        or closing_acceleration > 0.0
                     )
+                ):
                     actions[agent_id] = (
                         BRAKE if longitudinal_gap < max(6.0, stopping_gap)
                         else YIELD
@@ -884,11 +918,6 @@ class Stage2IntersectionEnv:
                     )
                     ego_acceleration = accel_by_action[actions[agent_id]]
 
-                other_acceleration = (
-                    predicted_acceleration[other.vehicle_id]
-                    if other.is_learning
-                    else self._background_acceleration(other)
-                )
                 predicted_close_time = self._predicted_close_approach(
                     ego,
                     other,
@@ -1826,6 +1855,68 @@ class Stage2IntersectionEnv:
                 traffic_ttc < 16.0
                 and agent_ttc < 16.0
                 and abs(traffic_ttc - agent_ttc) < 5.0
+            ):
+                return self.config.yield_acceleration
+
+        for other in self.background_vehicles:
+            if other is vehicle or other.completed:
+                continue
+
+            dx = other.x - vehicle.x
+            dy = other.y - vehicle.y
+            longitudinal_gap = (
+                dx * math.cos(vehicle.heading)
+                + dy * math.sin(vehicle.heading)
+            )
+            lateral_gap = abs(
+                -dx * math.sin(vehicle.heading)
+                + dy * math.cos(vehicle.heading)
+            )
+            same_direction = (
+                math.cos(vehicle.heading - other.heading) > 0.5
+            )
+
+            if (
+                same_direction
+                and lateral_gap < self.config.lane_width
+                and 0.0 < longitudinal_gap < 30.0
+                and vehicle.speed > other.speed + 0.1
+            ):
+                return self.config.yield_acceleration
+            if (
+                same_direction
+                and lateral_gap < self.config.lane_width
+                and -30.0 < longitudinal_gap < 0.0
+                and other.speed > vehicle.speed + 0.1
+            ):
+                target = self.config.background_max_speed
+
+            own_conflict, other_conflict = self._get_conflict_distances(
+                vehicle,
+                other,
+            )
+            if own_conflict is None or other_conflict is None:
+                continue
+            if (
+                own_conflict - vehicle.progress < -vehicle.length
+                or other_conflict - other.progress < -other.length
+            ):
+                continue
+
+            own_ttc, other_ttc = self._time_to_conflict(vehicle, other)
+            if (
+                min(own_ttc, other_ttc) >= 16.0
+                or abs(own_ttc - other_ttc) >= 5.0
+            ):
+                continue
+
+            if (
+                self._is_in_intersection(other)
+                or own_ttc > other_ttc
+                or (
+                    math.isclose(own_ttc, other_ttc, abs_tol=0.1)
+                    and vehicle.vehicle_id > other.vehicle_id
+                )
             ):
                 return self.config.yield_acceleration
 
