@@ -368,7 +368,14 @@ btnPause.onclick = () => {
   btnPause.classList.toggle('active', paused);
   sendCmd({cmd: paused ? 'pause' : 'resume'});
 };
-document.getElementById('btn-reset').onclick = () => sendCmd({cmd:'reset'});
+document.getElementById('btn-reset').onclick = () => {
+  if(paused){
+    paused = false;
+    btnPause.textContent = '⏸ Pause';
+    btnPause.classList.remove('active');
+  }
+  sendCmd({cmd:'reset'});
+};
 const speedSlider = document.getElementById('speed-slider');
 const speedVal    = document.getElementById('speed-val');
 speedSlider.oninput = () => {

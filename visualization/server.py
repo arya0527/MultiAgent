@@ -144,10 +144,22 @@ class SimState:
         self.running = True
         self.paused  = False
         self.speed   = 1.0   # sim speed multiplier
+        self.reset_requested = False
         self.episode = 0
         self.step    = 0
         self.total_collisions = 0
         self.total_completions = 0
+
+    def request_reset(self) -> None:
+        with self.lock:
+            self.reset_requested = True
+            self.paused = False
+
+    def consume_reset_request(self) -> bool:
+        with self.lock:
+            requested = self.reset_requested
+            self.reset_requested = False
+            return requested
 
 
 SIM_STATE = SimState()
@@ -428,6 +440,7 @@ def run_simulation(state: SimState) -> None:
     total_completions = 0
 
     while state.running:
+        state.consume_reset_request()
         episode += 1
         obs_dict  = env.reset(seed=episode * 17 + 3)
         ep_rewards: Dict[str, float] = {aid: 0.0 for aid in env.agents}
@@ -435,6 +448,9 @@ def run_simulation(state: SimState) -> None:
         step = 0
 
         while not (terminated or truncated) and state.running:
+            if state.consume_reset_request():
+                break
+
             if state.paused:
                 time.sleep(0.05)
                 continue
@@ -542,6 +558,8 @@ async def ws_handler(websocket) -> None:
                     SIM_STATE.paused = True
                 elif cmd == "resume":
                     SIM_STATE.paused = False
+                elif cmd == "reset":
+                    SIM_STATE.request_reset()
                 elif cmd == "speed":
                     SIM_STATE.speed = float(msg.get("value", 1.0))
             except Exception:
